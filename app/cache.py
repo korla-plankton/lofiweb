@@ -24,6 +24,17 @@ class Cache:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS converted_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    mode TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    content TEXT NOT NULL
+                )
+                """
+            )
 
     def get(self, url: str) -> Optional[str]:
         with self._connect() as conn:
@@ -40,4 +51,26 @@ class Cache:
                 ON CONFLICT(url) DO UPDATE SET content = excluded.content
                 """,
                 (url, content),
+            )
+
+    def get_converted(self, cache_key: str) -> Optional[str]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT content FROM converted_cache WHERE cache_key = ?", (cache_key,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_converted(self, cache_key: str, url: str, mode: str, content_hash: str, content: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO converted_cache(cache_key, url, mode, content_hash, content)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(cache_key) DO UPDATE SET
+                    url = excluded.url,
+                    mode = excluded.mode,
+                    content_hash = excluded.content_hash,
+                    content = excluded.content
+                """,
+                (cache_key, url, mode, content_hash, content),
             )
