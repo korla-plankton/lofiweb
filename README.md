@@ -10,6 +10,7 @@ It fetches a target URL server-side, extracts readable text, optionally converts
 - Reader endpoint (`GET /read?url=...`)
 - Plain text endpoint (`GET /text?url=...`)
 - Conversion endpoint (`GET /convert?url=...&mode=...`)
+- Bandwidth reporting for each fetched page (original HTML bytes, extracted text bytes, simplified reader HTML bytes, and estimated reduction %)
 - Server-side fetching via `httpx`
 - Deterministic extraction using `trafilatura`, with BeautifulSoup fallback
 - Deterministic conversion for:
@@ -79,3 +80,10 @@ If `OPENAI_API_KEY` is missing and an LLM mode is requested, `/convert` returns 
 ```bash
 pytest
 ```
+
+
+## Bandwidth metrics
+
+- `/read` displays a bandwidth report for the fetched page.
+- `/text` prepends metadata comments with the same metrics.
+- Metrics are stored in SQLite (`page_metrics`) keyed by normalized URL for later comparisons.

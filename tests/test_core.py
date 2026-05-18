@@ -58,3 +58,15 @@ def test_deterministic_converter_modes() -> None:
 def test_parse_mode_invalid() -> None:
     with pytest.raises(ValueError):
         parse_mode("bogus")
+
+
+def test_metrics_round_trip(tmp_path: Path) -> None:
+    db_path = tmp_path / "cache.db"
+    cache = Cache(str(db_path))
+    cache.set_metrics("https://example.com", 1000, 300, 400, 60.0)
+    metrics = cache.get_metrics("https://example.com")
+    assert metrics is not None
+    assert metrics["original_html_size"] == 1000
+    assert metrics["extracted_text_size"] == 300
+    assert metrics["simplified_reader_html_size"] == 400
+    assert metrics["estimated_reduction_pct"] == 60.0

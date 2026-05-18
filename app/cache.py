@@ -35,6 +35,17 @@ class Cache:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS page_metrics (
+                    url TEXT PRIMARY KEY,
+                    original_html_size INTEGER NOT NULL,
+                    extracted_text_size INTEGER NOT NULL,
+                    simplified_reader_html_size INTEGER NOT NULL,
+                    estimated_reduction_pct REAL NOT NULL
+                )
+                """
+            )
 
     def get(self, url: str) -> Optional[str]:
         with self._connect() as conn:
@@ -73,4 +84,44 @@ class Cache:
                     content = excluded.content
                 """,
                 (cache_key, url, mode, content_hash, content),
+            )
+
+    def get_metrics(self, url: str) -> Optional[dict[str, float]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT original_html_size, extracted_text_size, simplified_reader_html_size, estimated_reduction_pct
+                FROM page_metrics WHERE url = ?
+                """,
+                (url,),
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "original_html_size": row[0],
+            "extracted_text_size": row[1],
+            "simplified_reader_html_size": row[2],
+            "estimated_reduction_pct": row[3],
+        }
+
+    def set_metrics(
+        self,
+        url: str,
+        original_html_size: int,
+        extracted_text_size: int,
+        simplified_reader_html_size: int,
+        estimated_reduction_pct: float,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO page_metrics(url, original_html_size, extracted_text_size, simplified_reader_html_size, estimated_reduction_pct)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET
+                    original_html_size = excluded.original_html_size,
+                    extracted_text_size = excluded.extracted_text_size,
+                    simplified_reader_html_size = excluded.simplified_reader_html_size,
+                    estimated_reduction_pct = excluded.estimated_reduction_pct
+                """,
+                (url, original_html_size, extracted_text_size, simplified_reader_html_size, estimated_reduction_pct),
             )

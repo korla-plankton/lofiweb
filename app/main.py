@@ -8,13 +8,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 import httpx
 
 from app.cache import Cache
-from app.converter import (
-    ConvertMode,
-    DeterministicConverter,
-    LLMConverter,
-    PageData,
-    parse_mode,
-)
+from app.converter import ConvertMode, DeterministicConverter, LLMConverter, PageData, parse_mode
 from app.extractor import extract_links, extract_main_text
 
 app = FastAPI(title="LoFiWeb MVP")
@@ -50,7 +44,38 @@ async def fetch_html(url: str) -> str:
     return response.text
 
 
-async def get_page_data(url: str) -> PageData:
+def _size_bytes(content: str) -> int:
+    return len(content.encode("utf-8"))
+
+
+def _estimated_reduction(original_size: int, simplified_size: int) -> float:
+    if original_size <= 0:
+        return 0.0
+    return round(((original_size - simplified_size) / original_size) * 100, 2)
+
+
+def build_reader_html(url: str, text: str, metrics: dict[str, float]) -> str:
+    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"""
+    <html>
+      <head><title>LoFiWeb Reader View</title></head>
+      <body>
+        <h1>Reader View</h1>
+        <p><strong>Source:</strong> {url}</p>
+        <h2>Bandwidth Report</h2>
+        <ul>
+          <li>Original downloaded HTML size: {int(metrics['original_html_size'])} bytes</li>
+          <li>Extracted text size: {int(metrics['extracted_text_size'])} bytes</li>
+          <li>Simplified reader HTML size: {int(metrics['simplified_reader_html_size'])} bytes</li>
+          <li>Estimated reduction: {metrics['estimated_reduction_pct']}%</li>
+        </ul>
+        <pre style='white-space: pre-wrap; line-height: 1.4;'>{escaped}</pre>
+      </body>
+    </html>
+    """
+
+
+async def get_page_data(url: str) -> tuple[PageData, str]:
     try:
         normalized = normalize_url(url)
     except ValueError as exc:
@@ -62,7 +87,7 @@ async def get_page_data(url: str) -> PageData:
         raise HTTPException(status_code=422, detail="Could not extract readable content")
 
     links = extract_links(html, normalized)
-    return PageData(url=normalized, text=text, links=links)
+    return PageData(url=normalized, text=text, links=links), html
 
 
 async def get_reader_text(url: str) -> str:
@@ -71,7 +96,7 @@ async def get_reader_text(url: str) -> str:
     if cached:
         return cached
 
-    page_data = await get_page_data(normalized)
+    page_data, _html = await get_page_data(normalized)
     cache.set(normalized, page_data.text)
     return page_data.text
 
@@ -114,23 +139,55 @@ async def index() -> str:
 
 @app.get("/text", response_class=PlainTextResponse)
 async def text_endpoint(url: str = Query(..., description="Target page URL")) -> str:
-    return await get_reader_text(url)
+    normalized = normalize_url(url)
+    text = await get_reader_text(normalized)
+    metrics = cache.get_metrics(normalized)
+    if not metrics:
+        metrics = {
+            "original_html_size": 0,
+            "extracted_text_size": _size_bytes(text),
+            "simplified_reader_html_size": 0,
+            "estimated_reduction_pct": 0.0,
+        }
+    meta = (
+        f"# source_url: {normalized}\n"
+        f"# original_html_size_bytes: {int(metrics['original_html_size'])}\n"
+        f"# extracted_text_size_bytes: {int(metrics['extracted_text_size'])}\n"
+        f"# simplified_reader_html_size_bytes: {int(metrics['simplified_reader_html_size'])}\n"
+        f"# estimated_reduction_percent: {metrics['estimated_reduction_pct']}\n\n"
+    )
+    return meta + text
 
 
 @app.get("/read", response_class=HTMLResponse)
 async def read_endpoint(url: str = Query(..., description="Target page URL")) -> str:
-    text = await get_reader_text(url)
-    escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    return f"""
-    <html>
-      <head><title>LoFiWeb Reader View</title></head>
-      <body>
-        <h1>Reader View</h1>
-        <p><strong>Source:</strong> {url}</p>
-        <pre style='white-space: pre-wrap; line-height: 1.4;'>{escaped}</pre>
-      </body>
-    </html>
-    """
+    page_data, html = await get_page_data(url)
+
+    base_metrics = {
+        "original_html_size": _size_bytes(html),
+        "extracted_text_size": _size_bytes(page_data.text),
+    }
+    provisional_metrics = {**base_metrics, "simplified_reader_html_size": 0, "estimated_reduction_pct": 0.0}
+    reader_html = build_reader_html(page_data.url, page_data.text, provisional_metrics)
+
+    simplified_size = _size_bytes(reader_html)
+    reduction_pct = _estimated_reduction(base_metrics["original_html_size"], simplified_size)
+    final_metrics = {
+        **base_metrics,
+        "simplified_reader_html_size": simplified_size,
+        "estimated_reduction_pct": reduction_pct,
+    }
+
+    cache.set(page_data.url, page_data.text)
+    cache.set_metrics(
+        page_data.url,
+        int(final_metrics["original_html_size"]),
+        int(final_metrics["extracted_text_size"]),
+        int(final_metrics["simplified_reader_html_size"]),
+        float(final_metrics["estimated_reduction_pct"]),
+    )
+
+    return build_reader_html(page_data.url, page_data.text, final_metrics)
 
 
 @app.get("/convert", response_class=PlainTextResponse)
@@ -143,7 +200,7 @@ async def convert_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    page_data = await get_page_data(url)
+    page_data, _html = await get_page_data(url)
     content_hash = hashlib.sha256(page_data.text.encode("utf-8")).hexdigest()
     cache_key = f"{page_data.url}|{parsed_mode.value}|{content_hash}"
     cached = cache.get_converted(cache_key)
