@@ -5,6 +5,8 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 import trafilatura
 
+from app.converter import LinkItem
+
 
 def extract_main_text(html: str) -> str:
     extracted = trafilatura.extract(html, include_comments=False, include_tables=False)
@@ -19,13 +21,14 @@ def extract_main_text(html: str) -> str:
     return text.strip()
 
 
-def extract_links(html: str, base_url: str) -> list[str]:
+def extract_links(html: str, base_url: str) -> list[LinkItem]:
     soup = BeautifulSoup(html, "html.parser")
-    links: list[str] = []
+    links: list[LinkItem] = []
     for a in soup.find_all("a", href=True):
         href = a.get("href", "").strip()
         if not href:
             continue
         full_url = urljoin(base_url, href)
-        links.append(full_url)
+        link_text = a.get_text(strip=True) or full_url
+        links.append(LinkItem(text=link_text, url=full_url))
     return links

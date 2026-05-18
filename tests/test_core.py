@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.cache import Cache
-from app.converter import ConvertMode, DeterministicConverter, PageData, parse_mode
+from app.converter import ConvertMode, DeterministicConverter, LinkItem, PageData, parse_mode
 from app.extractor import extract_links, extract_main_text
 from app.main import normalize_url
 
@@ -45,14 +45,18 @@ def test_extraction_fallback_when_trafilatura_returns_none(monkeypatch: pytest.M
 def test_extract_links() -> None:
     html = '<a href="/a">A</a><a href="https://example.org/b">B</a>'
     links = extract_links(html, "https://example.com/path")
-    assert links == ["https://example.com/a", "https://example.org/b"]
+    assert [(link.text, link.url) for link in links] == [("A", "https://example.com/a"), ("B", "https://example.org/b")]
 
 
 def test_deterministic_converter_modes() -> None:
     converter = DeterministicConverter()
-    page = PageData(url="https://example.com", text="Hello", links=["https://a", "https://a", "https://b"])
+    page = PageData(url="https://example.com", text="Hello", links=[
+        LinkItem(text="A", url="https://a"),
+        LinkItem(text="A duplicate", url="https://a"),
+        LinkItem(text="B", url="https://b"),
+    ])
     assert converter.convert(page, ConvertMode.CLEAN_TEXT) == "Hello"
-    assert converter.convert(page, ConvertMode.KEY_LINKS) == "- https://a\n- https://b"
+    assert converter.convert(page, ConvertMode.KEY_LINKS) == "- [A](https://a)\n- [B](https://b)"
 
 
 def test_parse_mode_invalid() -> None:

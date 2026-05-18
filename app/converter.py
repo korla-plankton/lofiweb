@@ -5,7 +5,6 @@ import json
 import os
 from dataclasses import dataclass
 from enum import Enum
-from typing import Iterable
 
 
 class ConvertMode(str, Enum):
@@ -18,10 +17,16 @@ class ConvertMode(str, Enum):
 
 
 @dataclass
+class LinkItem:
+    text: str
+    url: str
+
+
+@dataclass
 class PageData:
     url: str
     text: str
-    links: list[str]
+    links: list[LinkItem]
 
 
 SAFE_PROMPT_RULES = """You must follow these rules strictly:
@@ -51,8 +56,17 @@ class DeterministicConverter(BaseConverter):
         if mode == ConvertMode.KEY_LINKS:
             if not data.links:
                 return "No links found in source content."
-            unique_links = list(dict.fromkeys(link for link in data.links if link.strip()))
-            return "\n".join(f"- {link}" for link in unique_links)
+
+            deduped: list[LinkItem] = []
+            seen: set[str] = set()
+            for link in data.links:
+                if link.url in seen:
+                    continue
+                seen.add(link.url)
+                deduped.append(link)
+
+            # Markdown links remain functional in most text/reader clients.
+            return "\n".join(f"- [{link.text}]({link.url})" for link in deduped)
 
         raise ValueError(f"Unsupported deterministic mode: {mode}")
 
@@ -88,11 +102,11 @@ class LLMConverter(BaseConverter):
         if not self.supports(mode):
             raise ValueError(f"Unsupported LLM mode: {mode}")
 
-        # Use lazy import so deterministic modes work without SDK installed.
         import httpx
 
         model = os.getenv("LOFIWEB_LLM_MODEL", "gpt-4o-mini")
         base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        links_text = "\n".join(f"{link.text}: {link.url}" for link in data.links[:50])
 
         payload = {
             "model": model,
@@ -104,7 +118,7 @@ class LLMConverter(BaseConverter):
                         f"Mode: {mode.value}\n"
                         f"Task: {self._prompt_for_mode(mode)}\n\n"
                         f"Source URL: {data.url}\n"
-                        f"Source Links:\n" + "\n".join(data.links[:50]) + "\n\n"
+                        f"Source Links:\n{links_text}\n\n"
                         f"Source Content:\n{data.text[:20000]}"
                     ),
                 },
