@@ -45,28 +45,38 @@ class BaseConverter:
         raise NotImplementedError
 
 
+def format_links_markdown(links: list[LinkItem]) -> str:
+    if not links:
+        return ""
+
+    deduped: list[LinkItem] = []
+    seen: set[str] = set()
+    for link in links:
+        if link.url in seen:
+            continue
+        seen.add(link.url)
+        deduped.append(link)
+
+    return "\n".join(f"- [{link.text}]({link.url})" for link in deduped)
+
+
 class DeterministicConverter(BaseConverter):
     def supports(self, mode: ConvertMode) -> bool:
         return mode in {ConvertMode.CLEAN_TEXT, ConvertMode.KEY_LINKS}
 
     def convert(self, data: PageData, mode: ConvertMode) -> str:
         if mode == ConvertMode.CLEAN_TEXT:
-            return data.text.strip()
+            links_block = format_links_markdown(data.links)
+            if not links_block:
+                return data.text.strip()
+            return f"{data.text.strip()}\n\nSource Links:\n{links_block}"
 
         if mode == ConvertMode.KEY_LINKS:
             if not data.links:
                 return "No links found in source content."
 
-            deduped: list[LinkItem] = []
-            seen: set[str] = set()
-            for link in data.links:
-                if link.url in seen:
-                    continue
-                seen.add(link.url)
-                deduped.append(link)
-
             # Markdown links remain functional in most text/reader clients.
-            return "\n".join(f"- [{link.text}]({link.url})" for link in deduped)
+            return format_links_markdown(data.links)
 
         raise ValueError(f"Unsupported deterministic mode: {mode}")
 

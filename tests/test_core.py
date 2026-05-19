@@ -55,7 +55,7 @@ def test_deterministic_converter_modes() -> None:
         LinkItem(text="A duplicate", url="https://a"),
         LinkItem(text="B", url="https://b"),
     ])
-    assert converter.convert(page, ConvertMode.CLEAN_TEXT) == "Hello"
+    assert converter.convert(page, ConvertMode.CLEAN_TEXT) == "Hello\n\nSource Links:\n- [A](https://a)\n- [B](https://b)"
     assert converter.convert(page, ConvertMode.KEY_LINKS) == "- [A](https://a)\n- [B](https://b)"
 
 

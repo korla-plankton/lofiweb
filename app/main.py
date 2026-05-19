@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 import httpx
 
 from app.cache import Cache
-from app.converter import ConvertMode, DeterministicConverter, LLMConverter, PageData, parse_mode
+from app.converter import ConvertMode, DeterministicConverter, LLMConverter, PageData, format_links_markdown, parse_mode
 from app.extractor import extract_links, extract_main_text
 
 app = FastAPI(title="LoFiWeb MVP")
@@ -54,8 +54,9 @@ def _estimated_reduction(original_size: int, simplified_size: int) -> float:
     return round(((original_size - simplified_size) / original_size) * 100, 2)
 
 
-def build_reader_html(url: str, text: str, metrics: dict[str, float]) -> str:
+def build_reader_html(url: str, text: str, metrics: dict[str, float], links_markdown: str = "") -> str:
     escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    escaped_links = links_markdown.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return f"""
     <html>
       <head><title>LoFiWeb Reader View</title></head>
@@ -70,6 +71,8 @@ def build_reader_html(url: str, text: str, metrics: dict[str, float]) -> str:
           <li>Estimated reduction: {metrics['estimated_reduction_pct']}%</li>
         </ul>
         <pre style='white-space: pre-wrap; line-height: 1.4;'>{escaped}</pre>
+        <h2>Source Links</h2>
+        <pre style='white-space: pre-wrap; line-height: 1.4;'>{escaped_links or 'No links found in source content.'}</pre>
       </body>
     </html>
     """
@@ -140,7 +143,10 @@ async def index() -> str:
 @app.get("/text", response_class=PlainTextResponse)
 async def text_endpoint(url: str = Query(..., description="Target page URL")) -> str:
     normalized = normalize_url(url)
-    text = await get_reader_text(normalized)
+    page_data, _html = await get_page_data(normalized)
+    cache.set(normalized, page_data.text)
+    text = page_data.text
+    links_block = format_links_markdown(page_data.links)
     metrics = cache.get_metrics(normalized)
     if not metrics:
         metrics = {
@@ -156,7 +162,13 @@ async def text_endpoint(url: str = Query(..., description="Target page URL")) ->
         f"# simplified_reader_html_size_bytes: {int(metrics['simplified_reader_html_size'])}\n"
         f"# estimated_reduction_percent: {metrics['estimated_reduction_pct']}\n\n"
     )
-    return meta + text
+    links_meta = f"# source_links_markdown:
+{links_block}
+
+" if links_block else "# source_links_markdown: none
+
+"
+    return meta + links_meta + text
 
 
 @app.get("/read", response_class=HTMLResponse)
@@ -167,8 +179,9 @@ async def read_endpoint(url: str = Query(..., description="Target page URL")) ->
         "original_html_size": _size_bytes(html),
         "extracted_text_size": _size_bytes(page_data.text),
     }
+    links_markdown = format_links_markdown(page_data.links)
     provisional_metrics = {**base_metrics, "simplified_reader_html_size": 0, "estimated_reduction_pct": 0.0}
-    reader_html = build_reader_html(page_data.url, page_data.text, provisional_metrics)
+    reader_html = build_reader_html(page_data.url, page_data.text, provisional_metrics, links_markdown)
 
     simplified_size = _size_bytes(reader_html)
     reduction_pct = _estimated_reduction(base_metrics["original_html_size"], simplified_size)
@@ -187,7 +200,7 @@ async def read_endpoint(url: str = Query(..., description="Target page URL")) ->
         float(final_metrics["estimated_reduction_pct"]),
     )
 
-    return build_reader_html(page_data.url, page_data.text, final_metrics)
+    return build_reader_html(page_data.url, page_data.text, final_metrics, links_markdown)
 
 
 @app.get("/convert", response_class=PlainTextResponse)
@@ -208,5 +221,8 @@ async def convert_endpoint(
         return cached
 
     converted = convert_content(page_data, parsed_mode)
+    links_block = format_links_markdown(page_data.links)
+    if parsed_mode != ConvertMode.KEY_LINKS and links_block:
+        converted = f"{converted}\n\nSource Links:\n{links_block}"
     cache.set_converted(cache_key, page_data.url, parsed_mode.value, content_hash, converted)
     return converted
